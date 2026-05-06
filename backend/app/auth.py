@@ -14,7 +14,10 @@ def verify_supabase_token(token: str) -> User:
         raise ValueError("SUPABASE_URL not set")
     
     url = f"{supabase_url}/auth/v1/user"
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "apikey": os.getenv("SUPABASE_SERVICE_KEY", "")
+    }
     
     with httpx.Client() as client:
         response = client.get(url, headers=headers)

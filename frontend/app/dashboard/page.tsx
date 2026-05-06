@@ -23,9 +23,9 @@ export default function DashboardPage() {
       setUser(session.user);
       
       try {
-        const response = await fetch(${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/interviews, {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/interviews`, {
           headers: {
-            'Authorization': \Bearer ${session.access_token}\
+            'Authorization': `Bearer ${session.access_token}`
           }
         });
         if (response.ok) {
@@ -91,7 +91,7 @@ export default function DashboardPage() {
                   
                   <div className="flex justify-between items-end">
                     <div>
-                      <span className={\	ext-xs px-2 py-1 rounded ${interview.status === 'completed' ? 'bg-green-900 text-green-300' : 'bg-yellow-900 text-yellow-300'}\}>
+                      <span className={`text-xs px-2 py-1 rounded ${interview.status === 'completed' ? 'bg-green-900 text-green-300' : 'bg-yellow-900 text-yellow-300'}`}>
                         {interview.status}
                       </span>
                     </div>
@@ -103,7 +103,7 @@ export default function DashboardPage() {
                   </div>
                   
                   <div className="mt-4 pt-4 border-t border-gray-700">
-                    <Link href={\/interview/${interview.id}${interview.status === 'completed' ? '/report' : ''}\} className="text-blue-400 hover:underline">
+                    <Link href={`/interview/${interview.id}${interview.status === 'completed' ? '/report' : ''}`} className="text-blue-400 hover:underline">
                       View Details &rarr;
                     </Link>
                   </div>

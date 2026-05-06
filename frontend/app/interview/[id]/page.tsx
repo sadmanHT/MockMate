@@ -1,8 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
+import { Mic, Settings, Volume2, Type } from "lucide-react";
+import VoiceButton from "@/components/VoiceButton";
+import InterviewerSpeaker from "@/components/InterviewerSpeaker";
+import AudioVisualizer from "@/components/AudioVisualizer";
+import { MockMateSpeechRecognition } from "@/lib/speechRecognition";
 
 export default function LiveInterviewPage() {
   const params = useParams();
@@ -19,7 +24,108 @@ export default function LiveInterviewPage() {
   const [answerText, setAnswerText] = useState("");
   
   const [evaluation, setEvaluation] = useState<any>(null);
+
+  // --- Voice Mode State ---
+  const [isVoiceMode, setIsVoiceMode] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   
+  // Settings
+  const [preferredVoiceURI, setPreferredVoiceURI] = useState<string>("");
+  const [autoSpeak, setAutoSpeak] = useState(true);
+  const [autoSubmit, setAutoSubmit] = useState(true);
+  const [silenceTimeout, setSilenceTimeout] = useState(2); // seconds
+
+  // Speech Recognition State
+  const [isListening, setIsListening] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState("");
+  const recognitionRef = useRef<MockMateSpeechRecognition | null>(null);
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Load preferences
+  useEffect(() => {
+    const savedAutoSpeak = localStorage.getItem("mm_autoSpeak");
+    const savedAutoSubmit = localStorage.getItem("mm_autoSubmit");
+    const savedVoice = localStorage.getItem("mm_voiceURI");
+    const savedTimeout = localStorage.getItem("mm_silenceTimeout");
+
+    if (savedAutoSpeak !== null) setAutoSpeak(savedAutoSpeak === "true");
+    if (savedAutoSubmit !== null) setAutoSubmit(savedAutoSubmit === "true");
+    if (savedVoice !== null) setPreferredVoiceURI(savedVoice);
+    if (savedTimeout !== null) setSilenceTimeout(parseInt(savedTimeout, 10));
+
+    // Load available voices
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      setAvailableVoices(voices);
+      if (!savedVoice && voices.length > 0) {
+        // Find default english female if possible
+        const defaultVoice = voices.find(v => v.lang.startsWith('en') && (v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('samantha'))) || voices.find(v => v.lang.startsWith('en')) || voices[0];
+        setPreferredVoiceURI(defaultVoice.voiceURI);
+      }
+    };
+    
+    loadVoices();
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+  }, []);
+
+  // Save preferences
+  useEffect(() => {
+    localStorage.setItem("mm_autoSpeak", autoSpeak.toString());
+    localStorage.setItem("mm_autoSubmit", autoSubmit.toString());
+    localStorage.setItem("mm_voiceURI", preferredVoiceURI);
+    localStorage.setItem("mm_silenceTimeout", silenceTimeout.toString());
+  }, [autoSpeak, autoSubmit, preferredVoiceURI, silenceTimeout]);
+
+
+  // Initialize Speech Recognition
+  useEffect(() => {
+    if (!evaluation && !submitting) {
+        recognitionRef.current = new MockMateSpeechRecognition(
+        (interim, final) => {
+            setInterimTranscript(interim);
+            if (final) {
+                setAnswerText((prev) => (prev ? prev + " " + final : final));
+                setInterimTranscript("");
+            }
+
+            if (autoSubmit && isListening) {
+                if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+                
+                silenceTimerRef.current = setTimeout(() => {
+                    handleStopListeningAndSubmit();
+                }, silenceTimeout * 1000);
+            }
+        },
+        (err) => {
+            console.error("Speech Rec Error:", err);
+            setIsListening(false);
+            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        },
+        () => {
+            setIsListening(false);
+        }
+        );
+    }
+    
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+      }
+    };
+  }, [autoSubmit, silenceTimeout, isListening, evaluation, submitting]);
+
+  useEffect(() => {
+    return () => {
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    }
+  }, []);
+
   useEffect(() => {
     if (params.id) {
       setInterviewId(params.id as string);
@@ -47,12 +153,10 @@ export default function LiveInterviewPage() {
           const data = await response.json();
           setQuestions(data.questions || []);
           
-          // Determine current question based on past answers length
           const pastAnswers = data.answers || [];
           if (pastAnswers.length > 0) {
               const nextIndex = pastAnswers.length;
               if (nextIndex >= data.questions.length) {
-                  // already finished answering all questions
                   router.push(`/interview/${interviewId}/report`);
               } else {
                   setCurrentIndex(nextIndex);
@@ -71,46 +175,84 @@ export default function LiveInterviewPage() {
     fetchInterview();
   }, [interviewId, router, supabase]);
 
-  const handleSubmitAnswer = async () => {
-    if (!answerText.trim()) return;
-    
-    setSubmitting(true);
-    setEvaluation(null);
-    
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
+
+  const handleStopListeningAndSubmit = () => {
+      if (recognitionRef.current) {
+          recognitionRef.current.stop();
+          setIsListening(false);
+      }
       
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/interviews/${interviewId}/answer`, {
-        method: "POST",
-        headers: {
-          'Authorization': `Bearer ${session?.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          question_index: currentIndex,
-          answer: answerText
-        })
-      });
-      
-      if (!response.ok) throw new Error("Failed to submit answer");
-      
-      const evalData = await response.json();
-      setEvaluation(evalData);
-      
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSubmitting(false);
-    }
+      setTimeout(() => {
+          submitAnswerForm();
+      }, 500);
+  }
+
+  const submitAnswerForm = async () => {
+    setAnswerText((currentAns) => {
+        if (!currentAns.trim()) return currentAns;
+        
+        const doSubmit = async (answerPayload: string) => {
+            setSubmitting(true);
+            setEvaluation(null);
+            
+            try {
+              const { data: { session } } = await supabase.auth.getSession();
+              
+              const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/interviews/${interviewId}/answer`, {
+                method: "POST",
+                headers: {
+                  'Authorization': `Bearer ${session?.access_token}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  question_index: currentIndex,
+                  answer: answerPayload
+                })
+              });
+              
+              if (!response.ok) throw new Error("Failed to submit answer");
+              
+              const evalData = await response.json();
+              setEvaluation(evalData);
+              
+              if (isVoiceMode && autoSpeak && window.speechSynthesis) {
+                  setTimeout(() => {
+                      const msg = new SpeechSynthesisUtterance(`You scored ${evalData.score} out of 10. Your main strength was ${evalData.strengths?.[0] || 'good'}. Consider improving ${evalData.improvements?.[0] || 'this area'}.`);
+                      const voice = window.speechSynthesis.getVoices().find(v => v.voiceURI === preferredVoiceURI);
+                      if (voice) msg.voice = voice;
+                      window.speechSynthesis.speak(msg);
+                  }, 1000);
+              }
+              
+            } catch (err: any) {
+              setError(err.message);
+            } finally {
+              setSubmitting(false);
+            }
+        };
+
+        doSubmit(currentAns);
+        return currentAns;
+    });
+  };
+
+  const handleSubmitAnswerClick = () => {
+      if (isListening && recognitionRef.current) {
+          recognitionRef.current.stop();
+          setIsListening(false);
+      }
+      submitAnswerForm();
   };
 
   const handleNext = async () => {
+    window.speechSynthesis.cancel(); 
+
     if (currentIndex < questions.length - 1) {
       setCurrentIndex(prev => prev + 1);
       setAnswerText("");
+      setInterimTranscript("");
       setEvaluation(null);
     } else {
-      // Complete interview
       setSubmitting(true);
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -133,6 +275,20 @@ export default function LiveInterviewPage() {
     }
   };
 
+  const toggleListening = () => {
+    if (!recognitionRef.current) return;
+
+    if (isListening) {
+      recognitionRef.current.stop();
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    } else {
+      window.speechSynthesis.cancel(); 
+      setInterimTranscript("");
+      recognitionRef.current.start();
+      setIsListening(true);
+    }
+  };
+
   if (loading) {
     return <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">Loading Interview...</div>;
   }
@@ -152,6 +308,90 @@ export default function LiveInterviewPage() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
       <div className="max-w-4xl mx-auto relative">
+        
+        <div className="flex justify-between items-center mb-6">
+            <div className="flex bg-gray-800 rounded-lg p-1">
+                <button 
+                  onClick={() => { setIsVoiceMode(false); window.speechSynthesis.cancel(); }}
+                  className={`flex items-center px-4 py-2 rounded-md text-sm font-medium transition ${!isVoiceMode ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+                >
+                    <Type size={16} className="mr-2" /> Text Mode
+                </button>
+                <button 
+                  onClick={() => setIsVoiceMode(true)}
+                  className={`flex items-center px-4 py-2 rounded-md text-sm font-medium transition ${isVoiceMode ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+                >
+                    <Volume2 size={16} className="mr-2" /> Voice Mode
+                </button>
+            </div>
+
+            {isVoiceMode && (
+              <div className="relative">
+                  <button 
+                    onClick={() => setShowSettings(!showSettings)}
+                    className="p-2 bg-gray-800 hover:bg-gray-700 rounded-full transition"
+                  >
+                      <Settings size={20} className="text-gray-300" />
+                  </button>
+
+                  {showSettings && (
+                      <div className="absolute right-0 top-12 w-80 bg-gray-800 border border-gray-700 rounded-lg p-4 shadow-xl z-50">
+                          <h4 className="font-bold border-b border-gray-700 pb-2 mb-3">Audio Settings</h4>
+                          
+                          <div className="space-y-4 text-sm">
+                              <div className="flex flex-col gap-1">
+                                  <label>Interviewer Voice</label>
+                                  <select 
+                                      value={preferredVoiceURI}
+                                      onChange={(e) => setPreferredVoiceURI(e.target.value)}
+                                      className="bg-gray-900 border border-gray-700 rounded p-1 text-white"
+                                  >
+                                      {availableVoices.map(v => (
+                                          <option key={v.voiceURI} value={v.voiceURI}>{v.name}</option>
+                                      ))}
+                                  </select>
+                              </div>
+
+                              <label className="flex items-center gap-2 cursor-pointer">
+                                  <input 
+                                      type="checkbox" 
+                                      checked={autoSpeak}
+                                      onChange={(e) => setAutoSpeak(e.target.checked)}
+                                      className="rounded bg-gray-900 border-gray-700 text-blue-500 focus:ring-blue-600"
+                                  />
+                                  Auto-speak questions
+                              </label>
+
+                              <label className="flex items-center gap-2 cursor-pointer">
+                                  <input 
+                                      type="checkbox" 
+                                      checked={autoSubmit}
+                                      onChange={(e) => setAutoSubmit(e.target.checked)}
+                                      className="rounded bg-gray-900 border-gray-700 text-blue-500 focus:ring-blue-600"
+                                  />
+                                  Auto-submit after silence
+                              </label>
+
+                              {autoSubmit && (
+                                  <div className="flex flex-col gap-1">
+                                      <label className="text-gray-400">Silence timeout: {silenceTimeout} seconds</label>
+                                      <input 
+                                          type="range" 
+                                          min="1" 
+                                          max="5" 
+                                          value={silenceTimeout}
+                                          onChange={(e) => setSilenceTimeout(parseInt(e.target.value))}
+                                          className="w-full accent-blue-600"
+                                      />
+                                  </div>
+                              )}
+                          </div>
+                      </div>
+                  )}
+              </div>
+            )}
+        </div>
+
         <div className="mb-8">
           <div className="flex justify-between text-sm text-gray-400 mb-2">
             <span>Question {currentIndex + 1} of {questions.length}</span>
@@ -165,12 +405,36 @@ export default function LiveInterviewPage() {
         </div>
 
         <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 mb-8 shadow-lg">
-          <h2 className="text-2xl font-bold mb-6 leading-relaxed">
+          <h2 className="text-2xl font-bold mb-4 leading-relaxed">
             {currentQuestion}
           </h2>
+
+          {isVoiceMode && !evaluation && (
+            <div className="mb-6">
+                <InterviewerSpeaker 
+                    text={currentQuestion} 
+                    autoSpeak={autoSpeak} 
+                    preferredVoiceURI={preferredVoiceURI}
+                />
+            </div>
+          )}
+
+          {isVoiceMode && !evaluation && (
+             <div className="my-8 flex flex-col items-center justify-center">
+                <div className="h-16 flex items-center justify-center mb-8">
+                    <AudioVisualizer isActive={isListening} />
+                </div>
+                <VoiceButton 
+                    isListening={isListening} 
+                    onClick={toggleListening} 
+                    isDisabled={submitting} 
+                    interimTranscript={interimTranscript}
+                />
+             </div>
+          )}
           
           <textarea
-            className="w-full h-48 bg-gray-900 border border-gray-600 rounded-lg p-4 text-white focus:outline-none focus:border-blue-500 resize-none"
+            className={`w-full h-48 bg-gray-900 border border-gray-600 rounded-lg p-4 text-white focus:outline-none focus:border-blue-500 resize-none ${isVoiceMode ? 'hidden' : 'block'}`}
             placeholder="Type your answer here..."
             value={answerText}
             onChange={e => setAnswerText(e.target.value)}
@@ -180,7 +444,7 @@ export default function LiveInterviewPage() {
           {!evaluation && (
             <div className="mt-6 flex justify-end">
               <button
-                onClick={handleSubmitAnswer}
+                onClick={handleSubmitAnswerClick}
                 disabled={submitting || !answerText.trim()}
                 className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 text-white font-bold py-3 px-8 rounded-lg transition"
               >

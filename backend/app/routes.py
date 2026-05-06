@@ -4,7 +4,7 @@ from typing import Optional
 from app.auth import verify_supabase_token, User
 from app.database import get_supabase_client
 from app.services.resume_parser import extract_text_from_pdf, parse_resume_with_ai
-from app.services.interview_engine import generate_questions, evaluate_answer, generate_final_report, groq_client
+from app.services.interview_engine import generate_questions, evaluate_answer, generate_final_report, get_groq_client
 import uuid
 
 router = APIRouter()
@@ -35,6 +35,7 @@ async def start_interview(
         file_bytes = await pdf_file.read()
         text = extract_text_from_pdf(file_bytes)
         
+    groq_client = get_groq_client()
     resume_data = parse_resume_with_ai(text, groq_client)
     questions = generate_questions(resume_data, job_title, job_description)
     
@@ -84,6 +85,7 @@ def answer_question(interview_id: str, request: AnswerRequest, user: User = Depe
     question = questions[request.question_index]
     resume_data = interview.get("resume_data", {})
     
+    groq_client = get_groq_client()
     evaluation = evaluate_answer(question, request.answer, resume_data, groq_client)
     
     answers = interview.get("answers", [])

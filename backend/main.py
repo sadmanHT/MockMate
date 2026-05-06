@@ -1,10 +1,12 @@
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from app.routes import router as routes_router
 import os
 
+# Load environment variables BEFORE importing routers/services so that os.getenv works!
 load_dotenv()
+
+from app.routes import router as routes_router
 
 app = FastAPI()
 

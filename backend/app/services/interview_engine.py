@@ -2,11 +2,12 @@ import os
 import json
 from groq import Groq
 
-# Initialize Groq client using environment variable
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+def get_groq_client():
+    api_key = os.environ.get("GROQ_API_KEY")
+    return Groq(api_key=api_key) if api_key else None
 
 def generate_questions(resume_data: dict, job_title: str, job_description: str) -> list:
+    groq_client = get_groq_client()
     system_prompt = (
         "You are an expert technical interviewer. Generate exactly 7 interview questions based "
         "on the candidate resume and job description. Mix behavioural (3), technical (3), and "
@@ -20,7 +21,7 @@ def generate_questions(resume_data: dict, job_title: str, job_description: str) 
     """
     
     completion = groq_client.chat.completions.create(
-        model="llama3-8b-8192",
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
@@ -65,7 +66,7 @@ def evaluate_answer(question: str, answer: str, resume_data: dict, groq_client_i
     """
     
     completion = groq_client_instance.chat.completions.create(
-        model="llama3-8b-8192",
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
@@ -81,6 +82,7 @@ def evaluate_answer(question: str, answer: str, resume_data: dict, groq_client_i
         return {"error": "Failed to parse JSON response"}
 
 def generate_final_report(questions: list, answers: list, evaluations: list, job_title: str) -> dict:
+    groq_client = get_groq_client()
     system_prompt = (
         "You are an expert technical interviewer generating a final report. "
         "Return valid JSON with keys: overall_score (int 1-10), summary (string), "
@@ -96,7 +98,7 @@ def generate_final_report(questions: list, answers: list, evaluations: list, job
     """
     
     completion = groq_client.chat.completions.create(
-        model="llama3-8b-8192",
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
