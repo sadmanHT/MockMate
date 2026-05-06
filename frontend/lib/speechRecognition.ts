@@ -1,6 +1,7 @@
 export class MockMateSpeechRecognition {
   private recognition: any = null;
   private isSpeaking: boolean = false;
+  private isIntentionallyStopped: boolean = false;
   private onTranscript: (interim: string, final: string) => void;
   private onErrorCallback: (error: string) => void;
   private onEndCallback: () => void;
@@ -27,6 +28,7 @@ export class MockMateSpeechRecognition {
 
       this.recognition.onstart = () => {
         this.isSpeaking = true;
+        this.isIntentionallyStopped = false;
       };
 
       this.recognition.onresult = (event: any) => {
@@ -50,7 +52,22 @@ export class MockMateSpeechRecognition {
 
       this.recognition.onend = () => {
         this.isSpeaking = false;
-        this.onEndCallback();
+        console.log("Speech recognition ended. isIntentionallyStopped:", this.isIntentionallyStopped);
+        // If the browser stopped it but we didn't intentionally stop it, try continuously restarting it (anti-flicker for continuous speech)
+        if (!this.isIntentionallyStopped) {
+            setTimeout(() => {
+                try {
+                    if (!this.isIntentionallyStopped) {
+                        console.log("Auto-restarting speech recognition...");
+                        this.recognition.start();
+                    }
+                } catch (err) {
+                    this.onEndCallback();
+                }
+            }, 250);
+        } else {
+            this.onEndCallback();
+        }
       };
     }
   }
@@ -60,6 +77,7 @@ export class MockMateSpeechRecognition {
   }
 
   public start() {
+    this.isIntentionallyStopped = false;
     if (this.recognition && !this.isSpeaking) {
       try {
         this.recognition.start();
@@ -70,6 +88,7 @@ export class MockMateSpeechRecognition {
   }
 
   public stop() {
+    this.isIntentionallyStopped = true;
     if (this.recognition && this.isSpeaking) {
       this.recognition.stop();
     }

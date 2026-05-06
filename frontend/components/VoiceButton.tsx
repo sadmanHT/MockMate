@@ -47,14 +47,21 @@ export default function VoiceButton({
         </button>
       </div>
 
-      {(interimTranscript || finalTranscript) && (
-        <div className="w-full max-w-2xl mt-4 p-4 min-h-[6rem] bg-gray-900 border border-gray-700 rounded-xl text-center">
-          <p className="text-white text-lg">
+      <div className="w-full max-w-2xl mt-8 p-6 min-h-[8rem] bg-gray-900 border border-gray-700 rounded-xl text-left shadow-inner flex flex-col justify-center">
+        {finalTranscript || interimTranscript || isListening ? (
+          <p className="text-white text-lg leading-relaxed">
             {finalTranscript}
-            <span className="text-gray-400 italic"> {interimTranscript}</span>
+            <span className="text-gray-400 italic ml-1">{interimTranscript}</span>
+            {isListening && !interimTranscript && (
+              <span className="text-blue-400 animate-pulse ml-1 whitespace-pre"> ...</span>
+            )}
           </p>
-        </div>
-      )}
+        ) : (
+          <p className="text-gray-500 text-lg text-center italic">
+            Click the microphone to start speaking...
+          </p>
+        )}
+      </div>
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { Mic, Settings, Volume2, Type } from "lucide-react";
 import VoiceButton from "@/components/VoiceButton";
 import InterviewerSpeaker from "@/components/InterviewerSpeaker";
 import AudioVisualizer from "@/components/AudioVisualizer";
+import InterviewerAvatar from "@/components/Avatar";
 import { MockMateSpeechRecognition } from "@/lib/speechRecognition";
 
 export default function LiveInterviewPage() {
@@ -43,6 +44,9 @@ export default function LiveInterviewPage() {
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Load preferences
+  const hiddenAudioRef = useRef<HTMLAudioElement>(null);
+  const [interviewerSpeaking, setInterviewerSpeaking] = useState(false);
+
   useEffect(() => {
     const savedAutoSpeak = localStorage.getItem("mm_autoSpeak");
     const savedAutoSubmit = localStorage.getItem("mm_autoSubmit");
@@ -80,6 +84,14 @@ export default function LiveInterviewPage() {
   }, [autoSpeak, autoSubmit, preferredVoiceURI, silenceTimeout]);
 
 
+  const autoSubmitRef = useRef(autoSubmit);
+  const silenceTimeoutRef = useRef(silenceTimeout);
+
+  useEffect(() => {
+    autoSubmitRef.current = autoSubmit;
+    silenceTimeoutRef.current = silenceTimeout;
+  }, [autoSubmit, silenceTimeout]);
+
   // Initialize Speech Recognition
   useEffect(() => {
     if (!evaluation && !submitting) {
@@ -91,18 +103,27 @@ export default function LiveInterviewPage() {
                 setInterimTranscript("");
             }
 
-            if (autoSubmit && isListening) {
+            if (autoSubmitRef.current) {
                 if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
                 
                 silenceTimerRef.current = setTimeout(() => {
-                    handleStopListeningAndSubmit();
-                }, silenceTimeout * 1000);
+                    // Trigger submit via a custom event or a stable reference
+                    document.getElementById('hidden-submit-btn')?.click();
+                }, silenceTimeoutRef.current * 1000);
             }
         },
         (err) => {
             console.error("Speech Rec Error:", err);
-            setIsListening(false);
-            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+            // Temporarily print STT errors directly onto the UI so we can diagnose silent STT failures
+            if (err) {
+                setInterimTranscript(`[Mic Error: ${err}] `);
+            }
+
+            // Don't kill the button state for silent errors like "no-speech" which browsers fire constantly
+            if (err === "not-allowed" || err === "audio-capture" || err === "network") {
+                setIsListening(false);
+                if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+            }
         },
         () => {
             setIsListening(false);
@@ -118,7 +139,7 @@ export default function LiveInterviewPage() {
         clearTimeout(silenceTimerRef.current);
       }
     };
-  }, [autoSubmit, silenceTimeout, isListening, evaluation, submitting]);
+  }, [evaluation, submitting]);
 
   useEffect(() => {
     return () => {
@@ -306,11 +327,24 @@ export default function LiveInterviewPage() {
   const progressPercentage = ((currentIndex) / questions.length) * 100;
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-8">
-      <div className="max-w-4xl mx-auto relative">
+    <div className="min-h-screen bg-gray-900 text-white p-4 md:p-8">
+      <div className="max-w-6xl mx-auto relative grid grid-cols-1 md:grid-cols-3 gap-8">
         
-        <div className="flex justify-between items-center mb-6">
-            <div className="flex bg-gray-800 rounded-lg p-1">
+        {/* Left Column: Avatar */}
+        <div className="md:col-span-1 flex flex-col pt-12 md:pt-20">
+          <InterviewerAvatar 
+            isSpeaking={interviewerSpeaking || (isVoiceMode && autoSpeak && evaluation !== null)} // fallback speaking state
+            isThinking={submitting} 
+            audioElement={hiddenAudioRef.current} 
+            size="lg" 
+          />
+          <audio ref={hiddenAudioRef} className="hidden" />
+        </div>
+
+        {/* Right Column: Question Content */}
+        <div className="md:col-span-2 flex flex-col">
+          <div className="flex justify-between items-center mb-6">
+              <div className="flex bg-gray-800 rounded-lg p-1">
                 <button 
                   onClick={() => { setIsVoiceMode(false); window.speechSynthesis.cancel(); }}
                   className={`flex items-center px-4 py-2 rounded-md text-sm font-medium transition ${!isVoiceMode ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
@@ -415,6 +449,8 @@ export default function LiveInterviewPage() {
                     text={currentQuestion} 
                     autoSpeak={autoSpeak} 
                     preferredVoiceURI={preferredVoiceURI}
+                    onStartSpeaking={() => setInterviewerSpeaking(true)}
+                    onStopSpeaking={() => setInterviewerSpeaking(false)}
                 />
             </div>
           )}
@@ -429,6 +465,7 @@ export default function LiveInterviewPage() {
                     onClick={toggleListening} 
                     isDisabled={submitting} 
                     interimTranscript={interimTranscript}
+                    finalTranscript={answerText}
                 />
              </div>
           )}
@@ -443,6 +480,11 @@ export default function LiveInterviewPage() {
           
           {!evaluation && (
             <div className="mt-6 flex justify-end">
+              <button
+                id="hidden-submit-btn"
+                onClick={handleStopListeningAndSubmit}
+                style={{ display: "none" }}
+              />
               <button
                 onClick={handleSubmitAnswerClick}
                 disabled={submitting || !answerText.trim()}
@@ -505,6 +547,7 @@ export default function LiveInterviewPage() {
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );
